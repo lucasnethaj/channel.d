@@ -36,21 +36,21 @@ class Channel(T) {
     }
 }
 
+struct Msg {
+    int a;
+    int b;
+    string c;
+}
+
 void main() {
-    auto chn = new Channel!string;
-    auto a = new shared(Msg)( 5, 3, "aaa");
+    auto chn = new Channel!(immutable(Msg)*);
+    auto a = new immutable(Msg)( 5, 3, "aaa");
+    printf("Main: %p\n", a);
     chn.send(a);
-    writeln("Main ", a.asasas, &a);
 
     auto th = new Thread({
             auto b = chn.recv();
-            b.asasas = "bbb";
-            writeln("Work ", b.asasas, &b);
-        /* foreach(_; 0..10) { */
-        /*     auto b = chn.recv(); */
-        /*     b.asasas = "bbb"; */
-        /*     writeln("Work ", b.asasas, &b); */
-        /* } */
+            printf("Work: %p\n", b);
     }).start;
 
     /* foreach(i; 0..10) { */
