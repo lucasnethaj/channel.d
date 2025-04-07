@@ -3,33 +3,75 @@ import core.sync.condition;
 import core.sync.mutex;
 
 import std.stdio;
+import std.variant;
 import std.container.dlist;
+
+private final
+class ThreadInfo {
+    Mutex m_lock;
+    Condition m_putMsg;
+
+    this() nothrow {
+        m_lock = new Mutex();
+        m_putMsg = new Condition(m_lock);
+    }
+
+    void notify(T)(T var) {
+        m_putMsg.notify;
+    }
+
+    static ref thisInfo() nothrow
+    {
+        static ThreadInfo ti;
+        if(!ti) {
+            debug writeln("New ThreadInfo");
+            ti = new ThreadInfo();
+        }
+        return ti;
+    }
+}
 
 class Channel(T) {
     DList!T queue;
 
-    private Mutex m_lock;
-    private Condition m_putMsg;
+    private:
+    ThreadInfo ti;
+    Mutex m_lock;
+
+    void listen() {
+        assert(!ti, "somebody is already listening to this channel");
+        ti = ThreadInfo.thisInfo;
+    }
+
+    void close() {
+        assert(ti == ThreadInfo.thisInfo, "You cannot close somebody elses channel");
+        ti = ThreadInfo.init;
+    }
 
     this() {
         m_lock = new Mutex;
-        m_putMsg = new Condition(m_lock);
     }
 
     void send(ref T val) {
         synchronized(m_lock) {
             queue.insert(val);
-            m_putMsg.notify();
+            if(ti) {
+                ti.notify(this);
+            }
         }
     }
 
     ref T recv() {
         synchronized(m_lock) {
+            listen();
+            scope(exit)
+                close();
+
             scope(success)
                 queue.removeFront();
 
             if(queue.empty) {
-                m_putMsg.wait();
+                ti.m_putMsg.wait();
             }
             return queue.front;
         }
@@ -51,7 +93,12 @@ void main() {
     auto th = new Thread({
             auto b = chn.recv();
             printf("Work: %p\n", b);
+            auto c = chn.recv();
+            printf("Work: %p\n", c);
     }).start;
+
+    printf("Main: %p\n", a);
+    chn.send(a);
 
     /* foreach(i; 0..10) { */
     /*     auto c = new shared Msg(i, 8, ""); */
