@@ -3,8 +3,11 @@ import core.sync.condition;
 import core.sync.mutex;
 
 import std.stdio;
+import std.sumtype;
+import std.meta;
 import std.variant;
 import std.container.dlist;
+import std.typecons;
 
 private final
 class ThreadInfo {
@@ -16,7 +19,9 @@ class ThreadInfo {
         m_putMsg = new Condition(m_lock);
     }
 
+    Variant notifee;
     void notify(T)(T var) {
+        notifee = var;
         m_putMsg.notify;
     }
 
@@ -24,15 +29,47 @@ class ThreadInfo {
     {
         static ThreadInfo ti;
         if(!ti) {
-            debug writeln("New ThreadInfo");
             ti = new ThreadInfo();
         }
         return ti;
     }
 }
 
+template ChannelBaseTypes(Channel) {
+    static if(isSumType!(Channel.Type)) {
+        alias ChannelBaseTypes = Channel.Type.Types;
+    }
+    else {
+        alias ChannelBaseTypes = Channel.Type;
+    }
+}
+
+static unittest {
+    static assert(is(ChannelBaseTypes!(Channel!int) == int));
+    static assert(is(ChannelBaseTypes!(Channel!(SumType!int)) == AliasSeq!int));
+}
+
+template CompositeTypeTypes(Channels...) {
+    alias CompositeTypeTypes = staticMap!(ChannelBaseTypes, Channels);
+}
+
+static unittest {
+    static assert(is(CompositeTypeTypes!(Channel!int) == AliasSeq!int));
+    static assert(is(CompositeTypeTypes!(Channel!(SumType!int)) == AliasSeq!int));
+
+    static assert(is(CompositeTypeTypes!(Channel!(SumType!int), Channel!int) == AliasSeq!(int, int)));
+}
+
+template CompositeType(Channels...) {
+    alias CompositeType = SumType!(NoDuplicates(CompositeTypeTypes!(Channels)));
+}
+
+CompositeTypeTypes!(Channels) select(Channels...)(Channel channels) {
+}
+
 class Channel(T) {
     DList!T queue;
+    alias Type = T;
 
     private:
     ThreadInfo ti;
