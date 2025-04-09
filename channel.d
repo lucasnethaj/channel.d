@@ -19,9 +19,9 @@ class ThreadInfo {
         m_putMsg = new Condition(m_lock);
     }
 
-    Variant notifee;
+    void* notifee;
     void notify(T)(T var) {
-        notifee = var;
+        notifee = cast(void*)var;
         m_putMsg.notify;
     }
 
@@ -61,19 +61,63 @@ static unittest {
 }
 
 template CompositeType(Channels...) {
-    alias CompositeType = SumType!(NoDuplicates(CompositeTypeTypes!(Channels)));
+    alias CompositeType = SumType!(NoDuplicates!(CompositeTypeTypes!(Channels)));
 }
 
-CompositeTypeTypes!(Channels) select(Channels...)(Channel channels) {
+static unittest {
+    static assert(is(CompositeType!(Channel!int, Channel!long) == SumType!(int, long)));
+}
+
+CompositeType!(Channels) select(Channels...)(Channels channels) {
+    alias ReturnType = CompositeType!(Channels);
+    foreach(channel; channels) {
+        channel.listen;
+    }
+    scope(exit) {
+        foreach(channel; channels) {
+            channel.close;
+        }
+    }
+    foreach(channel; channels) {
+        if(!channel.queue.empty) {
+            scope(exit) {
+                channel.queue.removeFront;
+            }
+            return ReturnType(channel.queue.front);
+        }
+    }
+
+
+    ThreadInfo.thisInfo.m_putMsg.wait;
+    foreach(channel; channels) {
+        if(&channel is ThreadInfo.thisInfo.notifee) {
+            scope(exit) {
+                channel.queue.removeFront;
+            }
+            return ReturnType(channel.queue.front);
+        }
+    }
+
+    assert(0, "Got notifyed but nothing in channels");
+}
+
+unittest {
+    auto i_c = new Channel!int;
+    auto str_c = new Channel!string;
+
+    i_c.send(5);
+    select(i_c, str_c).match!(
+        (int a) {
+            writeln("A ", a);
+        },
+        (string b) {
+            writeln("b ", b);
+        }
+    );
 }
 
 class Channel(T) {
-    DList!T queue;
     alias Type = T;
-
-    private:
-    ThreadInfo ti;
-    Mutex m_lock;
 
     void listen() {
         assert(!ti, "somebody is already listening to this channel");
@@ -85,11 +129,18 @@ class Channel(T) {
         ti = ThreadInfo.init;
     }
 
+    private:
+
+    DList!T queue;
+    ThreadInfo ti;
+    Mutex m_lock;
+
+
     this() {
         m_lock = new Mutex;
     }
 
-    void send(ref T val) {
+    void send(T val) {
         synchronized(m_lock) {
             queue.insert(val);
             if(ti) {
