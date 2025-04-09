@@ -66,6 +66,8 @@ template CompositeType(Channels...) {
 
 static unittest {
     static assert(is(CompositeType!(Channel!int, Channel!long) == SumType!(int, long)));
+    static assert(is(CompositeType!(Channel!(SumType!(int, long)), Channel!string) == SumType!(int, long, string)));
+    static assert(is(CompositeType!(Channel!(SumType!(int, string)), Channel!string) == SumType!(int, string)));
 }
 
 CompositeType!(Channels) select(Channels...)(Channels channels) {
@@ -165,6 +167,23 @@ class Channel(T) {
         }
     }
 }
+
+class SendChannel(T) {
+    alias Type = T;
+
+    this(C)(C rchannel) {
+    }
+}
+
+unittest {
+    auto a = SumType!(int, long)(5);
+    auto b = SumType!(long)(3);
+    auto c = SumType!(char)('a');
+    a = typeof(a)(b);
+    /* a = cast(typeof(a))c; */
+}
+
+/// ---- testing stufz ---
 
 struct Msg {
     int a;
