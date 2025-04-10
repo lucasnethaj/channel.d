@@ -5,11 +5,10 @@ import core.sync.mutex;
 import std.stdio;
 import std.sumtype;
 import std.meta;
-import std.variant;
 import std.container.dlist;
 import std.typecons;
 
-private final
+final
 class ThreadInfo {
     Mutex m_lock;
     Condition m_putMsg;
@@ -19,13 +18,21 @@ class ThreadInfo {
         m_putMsg = new Condition(m_lock);
     }
 
+    // We never use this variable directly.
+    // We only use the pointer to yield back control to who notified the thread.
+    // FIXME: Race condition two different channels might send something at the same time.
+    // The first one will be skipped
+    void delegate(void*) on_notify;
     void* notifee;
     void notify(T)(T var) {
         notifee = cast(void*)var;
         m_putMsg.notify;
+        if(on_notify) {
+            on_notify(cast(void*)var);
+        }
     }
 
-    static ref thisInfo() nothrow
+    private static ref thisInfo() nothrow
     {
         static ThreadInfo ti;
         if(!ti) {
@@ -104,6 +111,7 @@ CompositeType!(Channels) select(Channels...)(Channels channels) {
 }
 
 unittest {
+    import std.stdio;
     auto i_c = new Channel!int;
     auto str_c = new Channel!string;
 
@@ -142,6 +150,11 @@ class Channel(T) {
         m_lock = new Mutex;
     }
 
+    static if(isSumType!T) {
+        void send(T2)(val) if(T.has!T2) {
+            send(T(T2));
+        }
+    }
     void send(T val) {
         synchronized(m_lock) {
             queue.insert(val);
@@ -168,18 +181,39 @@ class Channel(T) {
     }
 }
 
-class SendChannel(T) {
-    alias Type = T;
+template isSubsetOf(Sub, Root) {
+    template existsIn(T) {
+        enum existsIn = staticIndexOf!(T, Root.Types) >= 0;
+    }
+    enum isSubsetOf = allSatisfy!(existsIn, Sub.Types);
+}
 
-    this(C)(C rchannel) {
+static unittest {
+    static assert(isSubsetOf!(SumType!(long), SumType!(long, int)));
+    static assert(!isSubsetOf!(SumType!(int), SumType!(long, char)));
+}
+
+class SendChannel(SubType) {
+    void send(SubType) {
+    }
+
+    this(BaseChannel)(BaseChannel rchannel) if(isSubsetOf!(SubType, BaseChannel.Type)) {
     }
 }
 
+version(unittest) {
+void handle(int  a) { writeln(a); }
+void handle(long a) { writeln(a); }
+void handle(char a) { writeln(a); }
+}
 unittest {
     auto a = SumType!(int, long)(5);
     auto b = SumType!(long)(3);
     auto c = SumType!(char)('a');
-    a = typeof(a)(b);
+
+    alias handler = match!(handle);
+    handler(a);
+    /* a = typeof(a)(b); */
     /* a = cast(typeof(a))c; */
 }
 
