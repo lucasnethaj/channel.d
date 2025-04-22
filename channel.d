@@ -2,11 +2,8 @@ import core.thread;
 import core.sync.condition;
 import core.sync.mutex;
 
-import std.stdio;
-import std.sumtype;
 import std.meta;
 import std.container.dlist;
-import std.typecons;
 
 final
 class ThreadInfo {
@@ -23,18 +20,14 @@ class ThreadInfo {
     // FIXME: Race condition two different channels might send something at the same time.
     // The first one will be skipped
     void delegate(void*) on_notify;
-    void* notifee;
     void notify(T)(T var) {
-        notifee = cast(void*)var;
         m_putMsg.notify;
         if(on_notify) {
             on_notify(cast(void*)var);
         }
     }
 
-    void wait() {
-        m_putMsg.wait;
-    }
+    void wait() => m_putMsg.wait;
 
     private static ref thisInfo() nothrow
     {
@@ -48,10 +41,10 @@ class ThreadInfo {
 
 struct Chact(T) {
     Channel!T channel;
-    void function(T) action;
+    void delegate(T) action;
 }
 
-Chact!T chact(T)(Channel!T channel, void function(T) action) {
+Chact!T chact(T)(Channel!T channel, void delegate(T) action) {
     return Chact!T(channel, action);
 }
 
@@ -87,10 +80,12 @@ unittest {
     cchar.listen;
     cchar.send('a');
     /* cint.send(5); */
+    bool received;
     select(
-        chact( cint, (int) { writeln("Got int"); } ),
-        chact( cchar, (char) { writeln("Got char"); } ),
+        chact( cint, (int) { assert(0); } ),
+        chact( cchar, (char) { received = true; } ),
     );
+    assert(received);
 }
 
 class Channel(T) {
@@ -117,13 +112,6 @@ class Channel(T) {
         m_lock = new Mutex;
     }
 
-    static if(isSumType!T) {
-        static foreach(T2; T.Types) {
-            void put(T2 val) {
-                send(T(val));
-            }
-        }
-    }
     void send(T val) {
         synchronized(m_lock) {
             queue.insert(val);
@@ -205,6 +193,8 @@ struct Msg {
 }
 
 void main() {
+    import std.stdio;
+
     auto chn = new Channel!(immutable(Msg)*);
     auto a = new immutable(Msg)( 5, 3, "aaa");
     printf("Main: %p\n", a);
@@ -212,7 +202,7 @@ void main() {
 
     auto th = new Thread({
             chn.listen;
-            scope(exit) chn.listen;
+            scope(exit) chn.close;
             auto b = chn.recv();
             printf("Work: %p\n", b);
             auto c = chn.recv();
