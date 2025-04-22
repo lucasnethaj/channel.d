@@ -32,6 +32,10 @@ class ThreadInfo {
         }
     }
 
+    void wait() {
+        m_putMsg.wait;
+    }
+
     private static ref thisInfo() nothrow
     {
         static ThreadInfo ti;
@@ -63,15 +67,17 @@ void select(ChannelActions...)(ChannelActions chacts) {
         }
     }
 
+    bool received;
     ThreadInfo.thisInfo.on_notify = (void* channel) { 
         foreach(chact; chacts) {
             if(channel is cast(void*)chact.channel) {
+                received = true;
                 chact.action(cast(chact.channel.Type)channel);
                 return;
             }
         }
     };
-    ThreadInfo.thisInfo.m_putMsg.wait;
+    while(!received) ThreadInfo.thisInfo.wait;
 }
 
 unittest {
@@ -133,12 +139,19 @@ class Channel(T) {
 
     ref T recv() {
         synchronized(m_lock) {
+            bool received;
+            ti.on_notify = (void* req) {
+                if(req is cast(void*)this) {
+                    received = true;
+                }
+            };
+
             scope(success)
                 queue.removeFront();
 
             // Fixme keep waiting if another channel notified
             if(queue.empty) {
-                ti.m_putMsg.wait();
+                while(!received) ti.wait();
             }
             return queue.front;
         }
@@ -151,8 +164,13 @@ class Request(T) {
         ti = ThreadInfo.thisInfo;
     }
     
-    T val;
+    private T _val;
+    private bool finished;
     ref T recv() {
+        if(finished) {
+            return _val;
+        }
+
         bool received;
         ti.on_notify = (void* req) {
             if(req is cast(void*)this) {
@@ -160,15 +178,22 @@ class Request(T) {
             }
         };
         while(!received) ti.wait;
-        return val;
+        return _val;
     }
 
-    void reply(T) {
+    void reply(T val) {
         synchronized(ti.m_lock) {
-            t = val;
+            _val = val;
+            finished = true;
             ti.notify(this);
         }
     }
+}
+
+unittest {
+    auto reqchn = new Request!int();
+    reqchn.reply(3);
+    assert(reqchn.recv == 3);
 }
 
 /// ---- testing stufz ---
