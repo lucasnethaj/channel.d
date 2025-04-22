@@ -173,7 +173,7 @@ class Channel(T) {
     alias Type = T;
 
     void listen() {
-        assert(!ti && !amIListening, "somebody is already listening to this channel");
+        assert(!ti || amIListening, "somebody else is already listening to this channel");
         ti = ThreadInfo.thisInfo;
     }
 
@@ -269,12 +269,11 @@ class SendChannel(SubType) {
         /*     pragma(msg, typeof(p)); */
         /* } */
         alias a = match!(rchannel.put);
-        static assert(0, typeof(a));
+        /* static assert(0, typeof(a)); */
         /* send_handler = match!(rchannel.put); */
     }
 }
 
-version(none)
 unittest {
     auto c = new Channel!(SumType!(int, ));
     auto sub = new SendChannel!(SumType!int)(c);
@@ -313,6 +312,7 @@ void main() {
 
     auto th = new Thread({
             chn.listen;
+            scope(exit) chn.listen;
             auto b = chn.recv();
             printf("Work: %p\n", b);
             auto c = chn.recv();
