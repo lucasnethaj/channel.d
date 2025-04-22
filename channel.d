@@ -77,16 +77,13 @@ static unittest {
     static assert(is(CompositeType!(Channel!(SumType!(int, string)), Channel!string) == SumType!(int, string)));
 }
 
+version(none)
 CompositeType!(Channels) select(Channels...)(Channels channels) {
     alias ReturnType = CompositeType!(Channels);
     foreach(channel; channels) {
-        channel.listen;
+        assert(channel.amIListening);
     }
-    scope(exit) {
-        foreach(channel; channels) {
-            channel.close;
-        }
-    }
+
     foreach(channel; channels) {
         if(!channel.queue.empty) {
             scope(exit) {
@@ -110,6 +107,7 @@ CompositeType!(Channels) select(Channels...)(Channels channels) {
     assert(0, "Got notifyed but nothing in channels");
 }
 
+version(none)
 unittest {
     import std.stdio;
     auto i_c = new Channel!int;
@@ -126,16 +124,61 @@ unittest {
     );
 }
 
+struct Chact(T) {
+    Channel!T channel;
+    void function(T) action;
+}
+
+Chact!T chact(T)(Channel!T channel, void function(T) action) {
+    return Chact!T(channel, action);
+}
+
+void select(ChannelActions...)(ChannelActions chacts) {
+    foreach(chact; chacts) {
+        assert(chact.channel.amIListening);
+        if(!chact.channel.queue.empty) {
+            scope(exit) {
+                chact.channel.queue.removeFront;
+            }
+            chact.action(chact.channel.queue.front);
+            return;
+        }
+    }
+
+    ThreadInfo.thisInfo.on_notify = (void* channel) { 
+        foreach(chact; chacts) {
+            if(channel is cast(void*)chact.channel) {
+                chact.action(cast(chact.channel.Type)channel);
+                return;
+            }
+        }
+    };
+    ThreadInfo.thisInfo.m_putMsg.wait;
+}
+
+unittest {
+    auto cint = new Channel!int;
+    auto cchar = new Channel!char;
+    cint.listen;
+    cchar.listen;
+    cchar.send('a');
+    /* cint.send(5); */
+    select(
+        chact( cint, (int) { writeln("Got int"); } ),
+        chact( cchar, (char) { writeln("Got char"); } ),
+    );
+}
+
 class Channel(T) {
     alias Type = T;
 
     void listen() {
-        assert(!ti, "somebody is already listening to this channel");
+        assert(!ti && !amIListening, "somebody is already listening to this channel");
         ti = ThreadInfo.thisInfo;
     }
 
     void close() {
-        assert(ti == ThreadInfo.thisInfo, "You cannot close somebody elses channel");
+        assert(!amIListening, "You cannot close somebody elses channel");
         ti = ThreadInfo.init;
     }
 
@@ -151,8 +194,10 @@ class Channel(T) {
     }
 
     static if(isSumType!T) {
-        void send(T2)(val) if(T.has!T2) {
-            send(T(T2));
+        static foreach(T2; T.Types) {
+            void put(T2 val) {
+                send(T(val));
+            }
         }
     }
     void send(T val) {
@@ -164,12 +209,12 @@ class Channel(T) {
         }
     }
 
+    bool amIListening() {
+        return ThreadInfo.thisInfo is ti;
+    }
+
     ref T recv() {
         synchronized(m_lock) {
-            listen();
-            scope(exit)
-                close();
-
             scope(success)
                 queue.removeFront();
 
@@ -193,12 +238,47 @@ static unittest {
     static assert(!isSubsetOf!(SumType!(int), SumType!(long, char)));
 }
 
+template Handlers(S) {
+    alias Handlers = AliasSeq!();
+    static foreach (T; S.Types)
+        Handlers = AliasSeq!(Handlers, void function(T));
+}
+
+template H(handlers...)
+{
+    static assert(0, typeof(handlers));
+}
+
+
 class SendChannel(SubType) {
-    void send(SubType) {
+    void function(SubType) send_handler;
+    void send(SubType s) {
+        send_handler(s);
+    }
+
+    static foreach(T2; SubType.Types) {
+        void put(T2 val) {
+            send(SubType(val));
+        }
     }
 
     this(BaseChannel)(BaseChannel rchannel) if(isSubsetOf!(SubType, BaseChannel.Type)) {
+        /* static assert(0, typeof(AliasSeq!(BaseChannel.put))); */
+        /* H!(rchannel.put); */
+        /* static foreach(p; AliasSeq(BaseChannel.put)) { */
+        /*     pragma(msg, typeof(p)); */
+        /* } */
+        alias a = match!(rchannel.put);
+        static assert(0, typeof(a));
+        /* send_handler = match!(rchannel.put); */
     }
+}
+
+version(none)
+unittest {
+    auto c = new Channel!(SumType!(int, ));
+    auto sub = new SendChannel!(SumType!int)(c);
+    /* sub.send(5); */
 }
 
 version(unittest) {
@@ -232,6 +312,7 @@ void main() {
     chn.send(a);
 
     auto th = new Thread({
+            chn.listen;
             auto b = chn.recv();
             printf("Work: %p\n", b);
             auto c = chn.recv();
