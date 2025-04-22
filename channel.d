@@ -218,10 +218,37 @@ class Channel(T) {
             scope(success)
                 queue.removeFront();
 
+            // Fixme keep waiting if another channel notified
             if(queue.empty) {
                 ti.m_putMsg.wait();
             }
             return queue.front;
+        }
+    }
+}
+
+class Request(T) {
+    ThreadInfo ti;
+    this() {
+        ti = ThreadInfo.thisInfo;
+    }
+    
+    T val;
+    ref T recv() {
+        bool received;
+        ti.on_notify = (void* req) {
+            if(req is cast(void*)this) {
+                received = true;
+            }
+        };
+        while(!received) ti.wait;
+        return val;
+    }
+
+    void reply(T) {
+        synchronized(ti.m_lock) {
+            t = val;
+            ti.notify(this);
         }
     }
 }
