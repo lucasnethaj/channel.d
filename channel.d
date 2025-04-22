@@ -27,7 +27,10 @@ class ThreadInfo {
         }
     }
 
-    void wait() => m_putMsg.wait;
+    void wait() { 
+        Fiber.yield;
+        m_putMsg.wait;
+    }
 
     private static ref thisInfo() nothrow
     {
@@ -97,8 +100,8 @@ class Channel(T) {
     }
 
     void close() {
-        assert(!amIListening, "You cannot close somebody elses channel");
-        ti = ThreadInfo.init;
+        assert(!ti || amIListening, "You cannot close somebody elses channel");
+        ti = null;
     }
 
     private:
@@ -113,7 +116,7 @@ class Channel(T) {
     }
 
     void send(T val) {
-        synchronized(m_lock) {
+        synchronized(lock()) {
             queue.insert(val);
             if(ti) {
                 ti.notify(this);
@@ -125,8 +128,16 @@ class Channel(T) {
         return ThreadInfo.thisInfo is ti;
     }
 
+    Mutex lock() {
+        if(ti) {
+            return ti.m_lock;
+        }
+        return m_lock;
+    }
+
     ref T recv() {
-        synchronized(m_lock) {
+        assert(amIListening);
+        synchronized(ti.m_lock) {
             bool received;
             ti.on_notify = (void* req) {
                 if(req is cast(void*)this) {
@@ -155,18 +166,20 @@ class Request(T) {
     private T _val;
     private bool finished;
     ref T recv() {
-        if(finished) {
+        synchronized(ti.m_lock) {
+            if(finished) {
+                return _val;
+            }
+
+            bool received;
+            ti.on_notify = (void* req) {
+                if(req is cast(void*)this) {
+                    received = true;
+                }
+            };
+            while(!received) ti.wait;
             return _val;
         }
-
-        bool received;
-        ti.on_notify = (void* req) {
-            if(req is cast(void*)this) {
-                received = true;
-            }
-        };
-        while(!received) ti.wait;
-        return _val;
     }
 
     void reply(T val) {
@@ -182,6 +195,18 @@ unittest {
     auto reqchn = new Request!int();
     reqchn.reply(3);
     assert(reqchn.recv == 3);
+}
+
+version(none)
+unittest {
+    auto ch1 = new Channel!int;
+    auto ch2 = new Channel!int;
+    /* ch1.listen; ch1.recv; */
+    auto f1 = new Fiber({ch1.listen; int v = ch1.recv;});
+    /* auto f2 = new Fiber({ch2.listen; int v = ch2.recv;}); */
+    f1.call;
+    f1.call;
+    /* f2.call; */
 }
 
 /// ---- testing stufz ---
